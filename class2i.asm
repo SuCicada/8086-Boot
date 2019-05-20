@@ -1,27 +1,27 @@
 assume cs:code
 code segment
 start:
-    mov ax,cs
-    mov es,ax
-    mov bx,offset boot
-
-    mov ah,3  ; 功能号,2:读扇区, 3:写扇区
-    mov al,3  ; 扇区数
-    mov ch,0  ; 磁道号
-    mov cl,1  ; 扇区号
-    mov dl,0  ; 驱动号
-    mov dh,0  ; 磁头号
-    int 13h
-
     ; mov ax,cs
-    ; mov ds,ax
-    ; mov si,offset boot
-    ; mov ax,0h
     ; mov es,ax
-    ; mov di,7c00h
-    ; mov cx,offset over - offset boot
-    ; cld 
-    ; rep movsb
+    ; mov bx,offset boot
+
+    ; mov ah,3  ; 功能号,2:读扇区, 3:写扇区
+    ; mov al,4  ; 扇区数
+    ; mov ch,0  ; 磁道号
+    ; mov cl,1  ; 扇区号
+    ; mov dl,0  ; 驱动号
+    ; mov dh,0  ; 磁头号
+    ; int 13h
+
+    mov ax,cs
+    mov ds,ax
+    mov si,offset boot
+    mov ax,0h
+    mov es,ax
+    mov di,7c00h
+    mov cx,offset over - offset boot
+    cld 
+    rep movsb
 
     mov ax,4c00h
     int 21h
@@ -39,15 +39,19 @@ boot:
               dw offset clock 
               dw offset setclock 
 boot_start:
-    mov bx,7c00h+200h
-    mov dl,0
-    mov cl,2
-    call copy_disk
+    ; mov bx,7c00h+200h
+    ; mov al,2    ; 扇区号 al 代替
+    ; mov dl,0    ; 软盘
+    ; mov cx,3    ; 另外拷贝的扇区数
+    ; boot_start_s:
+    ; push cx
+    ; mov cl,al
+    ; call copy_disk
+    ; add bx,200h
+    ; add al,1
+    ; pop cx
+    ; loop boot_start_s
 
-    mov bx,7c00h+200h+200h
-    mov dl,0
-    mov cl,3
-    call copy_disk
 
     ; cli
     mov ax,cs:[7c02h]   ; 偏移量
@@ -514,7 +518,7 @@ int9_end:
     nop
 
 ; =======================================================
-; ================== Set Time ========================
+; ================== 4. Set Time ========================
 ; =======================================================
 
 setclock:
@@ -531,7 +535,7 @@ setclock_start:
     push bp
 
     mov bp,0
-    sub bp,cs:[7c02h]   ; 偏移量
+    sub bp,cs:[7c02h]   ; 偏移量, bp 绝对不会改变, 诚不欺你
 
     call showform    
     call getstr
@@ -643,7 +647,8 @@ setclock_end:
 charstack:
     jmp short charstart
     table dw charpush,charpop,charshow
-          dw charCurrentTime,charclear,charWriteTime,charCheck
+          dw charCurrentTime,charclear,charWriteTime
+          dw charCheck
     ; top dw 0 ; top of newtime
     top2 dw 0    ; top of timeform
     nodig dw 0
@@ -832,34 +837,42 @@ charCheck:
 ;-----------------------
     jmp short charCheck_c
     year db 0   ;  闰年:1  平年:0
-    month db 00000001b,00010010b
+    month db 0  ;  第几月  从0开始
     day db 1,0eh,1,0,1,0,1,1,0,1,0,1
-    charCheck_func 
-        dw charCheck_year,charCheck_month,charCheck_day
-        dw charCheck_hour,charCheck_minute_second
+    charCheck_func dw charCheck_year,charCheck_month,charCheck_day
+                   dw charCheck_hour,charCheck_minute_second
 charCheck_c:
-    mov si,offset timeform
-    add si,bp
-    add si,top2[bp]
-    mov dl,ds:[si]    ; 写下的数字
-    sub dl,'0'        ; 记得把字符变成数字
+    mov dl,al   ; 备份 al 写下的数字
  
     ; 通过除以3, 计算需要使用哪一个函数
-    mov ax,top2[bp]
+    mov ax,top2[bp]   ; ax(top2) / bl(3) = al ..  ah
     mov bl,3
-    div bl
-    mov bl,al
-    mov al,dl
+    div bl       ; 商 al   余数 ah
+    mov bl,al    
     mov bh,0
-    mov si,bx
-    mov bx,charCheck_func[bp][si]
+    add bx,bx    ; 很重要, 因为我地址是用的 dw 存的
     add bx,bp
-    call bx  ; 传入 al:写下的数字, ah: 是十位还是个位
+    mov bx,charCheck_func[bx]
+    add bx,bp
+    mov al,dl   ; 写下的数字 还给al
 
-    
+    call bx  ; 传入: al:写下的数字, ah: 是十位(0)还是个位(1)
+             ; 传出: al(改后)  or void(不需要改) 
+    ; add al,'0'
+    ; call show_debug
+    ; sub al,'0'
+
+    mov bx,ss
+    mov es,bx
+    mov bx,sp
+    mov es:[bx][2*8],al  ; 直接改栈
     jmp charret
 
-charCheck_year:
+charCheck_year:  ; ----[ output: void ]----
+    push ax
+    push cx
+    push dx
+    push si
     cmp ah,0
     je charCheck_year_o
 
@@ -883,14 +896,48 @@ charCheck_year:
     cmp ah,0   ; 真则为闰年 
     jne charCheck_year_o   ; 不是闰年则直接结束, 就是0
     mov year[bp],1    ; 是则会执行这一句
-        charCheck_year_o:
+
+    charCheck_year_o:   ;------------------  over ------
+    ; mov al,year[bp]    
+    ; add al,'0'
+    ; call show_debug
+    pop si
+    pop dx
+    pop cx 
+    pop ax
     ret
 
 charCheck_month:
-charCheck_day:
-charCheck_hour:
-charCheck_minute_second:
+    call show_debug
+    push si
 
+    cmp ah,0    ; 十位 ?
+    jne charCheck_month_bits ; 不是十位, 那就是个位
+        cmp al,1
+        jna charCheck_month_o
+            mov al,1
+            jmp charCheck_month_o
+    charCheck_month_bits:   ; 个位
+    mov si,offset timeform
+    add si,bp
+    add si,top2[bp]
+    mov ah,ds:[si-1]    ; 十位的数字
+    sub ah,'0'
+    cmp ah,1    ; 看看十位是 1 吗
+    jne charCheck_month_o    ;  最大12, 超过设置个位为2
+        cmp al,2
+        jna charCheck_month_o  ; 没有打过12, 平安无事
+            mov al,2
+    charCheck_month_o:
+    add al,'0'
+    pop si
+    ret
+charCheck_day:
+    ret
+charCheck_hour:
+    ret
+charCheck_minute_second:
+    ret
 charret:
     pop ds
     pop es
