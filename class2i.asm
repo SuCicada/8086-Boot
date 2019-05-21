@@ -1,27 +1,27 @@
 assume cs:code
 code segment
 start:
-    ; mov ax,cs
-    ; mov es,ax
-    ; mov bx,offset boot
-
-    ; mov ah,3  ; 功能号,2:读扇区, 3:写扇区
-    ; mov al,4  ; 扇区数
-    ; mov ch,0  ; 磁道号
-    ; mov cl,1  ; 扇区号
-    ; mov dl,0  ; 驱动号
-    ; mov dh,0  ; 磁头号
-    ; int 13h
-
     mov ax,cs
-    mov ds,ax
-    mov si,offset boot
-    mov ax,0h
     mov es,ax
-    mov di,7c00h
-    mov cx,offset over - offset boot
-    cld 
-    rep movsb
+    mov bx,offset boot
+
+    mov ah,3  ; 功能号,2:读扇区, 3:写扇区
+    mov al,4  ; 扇区数
+    mov ch,0  ; 磁道号
+    mov cl,1  ; 扇区号
+    mov dl,0  ; 驱动号
+    mov dh,0  ; 磁头号
+    int 13h
+
+    ; mov ax,cs
+    ; mov ds,ax
+    ; mov si,offset boot
+    ; mov ax,0h
+    ; mov es,ax
+    ; mov di,7c00h
+    ; mov cx,offset over - offset boot
+    ; cld 
+    ; rep movsb
 
     mov ax,4c00h
     int 21h
@@ -39,18 +39,18 @@ boot:
               dw offset clock 
               dw offset setclock 
 boot_start:
-    ; mov bx,7c00h+200h
-    ; mov al,2    ; 扇区号 al 代替
-    ; mov dl,0    ; 软盘
-    ; mov cx,3    ; 另外拷贝的扇区数
-    ; boot_start_s:
-    ; push cx
-    ; mov cl,al
-    ; call copy_disk
-    ; add bx,200h
-    ; add al,1
-    ; pop cx
-    ; loop boot_start_s
+    mov bx,7c00h+200h
+    mov al,2    ; 扇区号 al 代替
+    mov dl,0    ; 软盘
+    mov cx,3    ; 另外拷贝的扇区数
+    boot_start_s:
+    push cx
+    mov cl,al
+    call copy_disk
+    add bx,200h
+    add al,1
+    pop cx
+    loop boot_start_s
 
 
     ; cli
@@ -108,6 +108,8 @@ menu:
         db '2) start system',1
         db '3) clock',1
         db '4) set clock',1
+        db 1
+        db 'Press (1-4) key to choose.',1
 menu_start:
     push ax
     push cx
@@ -138,7 +140,7 @@ menu_start:
     mov ds,ax
     mov si,offset info; - offset boot + 7c00h
     add si,bx
-    mov cx,4
+    mov cx,6
     ms_s:
         push di  ; 保存di, 用于定位显存的下一行直接+160即可
         ms_row:
@@ -321,6 +323,8 @@ copy_code:
 ; =================== [ 3. 显示时间 ] ================
 print:  db 'yy/mm/dd hh:mm:ss '
 site:   db 9,8,7,4,2,0
+clock_info: db 'Press F1 to Change color.',1
+            db 'Press Esc to Exit.',1
 clock:
     push ax
     push bx
@@ -331,10 +335,53 @@ clock:
     push es
     push ds
 
+    call clock_show_info
     ; bx 要被传入  作为偏移量
     call int9_install  ; 返回值 al, 1: 不退出, 0: 退出
     ; call clear
+    jmp clock_start
 
+clock_show_info: 
+    push ax
+    push bx
+    push cx
+    push es
+    push di
+    push si
+    push bp
+
+    mov bp,0
+    sub bp,cs:[7c02h]
+
+    mov ax,0b800h
+    mov es,ax
+    mov cx,offset clock - offset clock_info
+    mov di,160*8+20*2
+    mov si,0
+    mov bx,di   ; backup 
+    clock_show_info_s:
+        mov al,cs:[offset clock_info][bp][si]
+        cmp al,1
+        jne clock_show_info_currentline
+            mov di,bx
+            add di,160
+            mov bx,di
+            jmp clock_show_info_so
+        clock_show_info_currentline:
+        mov es:[di],al
+        mov byte ptr es:[di+1],7
+        add di,2
+        clock_show_info_so:
+        add si,1
+    loop clock_show_info_s
+    pop bp
+    pop si
+    pop di
+    pop es
+    pop cx
+    pop bx
+    pop ax
+    ret
 
 
 clock_start:
@@ -524,10 +571,11 @@ int9_end:
 setclock:
     jmp setclock_start
     setclock_info:
-        db 'press Backspace to delete current number.',1
-        db 'press Enter to Set Time.',1
-        db 'press Esc to Exit.',1
-        db 'yy/mm/dd hh:mm:ss.',1
+        db 'Press Backspace to delete current number.',1
+        db 'Press Enter to Set Time.',1
+        db 'Press Esc to Exit.',1
+        db 'The character ',39,'-',39,' will not be set.',1
+        db 'yy/mm/dd hh:mm:ss.',1,1
     timeform: db '--/--/-- --:--:-- '
     newtime: ; db 'xxxxxxxxxx '
     ; site:   db 9,8,7,4,2,0
@@ -553,7 +601,7 @@ showform:
     mov ax,0b800h
     mov es,ax
     mov cx,offset timeform - offset setclock_info
-    mov di,160*8+20*2
+    mov di,160*7+20*2
     mov si,0
     mov bx,di   ; backup 
     showform_s:
@@ -695,8 +743,8 @@ charpush_c:
 
     cmp nodig[bp], 2
     jne charret_c
-    mov nodig[bp], 0    
-    add top2[bp], 1
+        mov nodig[bp], 0    
+        add top2[bp], 1
 
     jmp charret
 
@@ -736,6 +784,7 @@ charshow:
     add dl,dl
     mov dh,0
     add di,dx
+    push di
 
     mov cx,offset newtime - offset timeform
     mov si,offset timeform
@@ -749,10 +798,15 @@ charshow:
     loop charshow_s
 
     ; 最后字符闪烁,模拟光标
-    mov ax,offset newtime - offset timeform
-    sub ax,top2[bp]
+    ; di = di - (len - top2) 
+    pop di
+    ; mov ax,offset newtime - offset timeform
+    ; sub ax,top2[bp]
+    ; add ax,ax
+    ; sub di,ax
+    mov ax,top2[bp]
     add ax,ax
-    sub di,ax
+    add di,ax
     or byte ptr es:[di+1],10000000b 
     jmp charret
 
@@ -805,6 +859,10 @@ charWriteTime:
         ; mov ah,0
         ; int 16h
         ; pop ax
+        cmp ah,'-'
+        je charWriteTime_s_continue
+        cmp al,'-'
+        je charWriteTime_s_continue
 
         sub ah,30h
         sub al,30h
@@ -820,6 +878,7 @@ charWriteTime:
         out 70h,al
         mov al,ah
         out 71h,al   ; 写入的时间
+        charWriteTime_s_continue:
         inc bx
         add si,3
         pop cx
@@ -829,6 +888,7 @@ charWriteTime:
 charclear:
     ; mov top[bp],0
     mov top2[bp],0
+    mov nodig[bp],0
     jmp charret
 
 charCheck:
@@ -838,25 +898,28 @@ charCheck:
     jmp short charCheck_c
     year db 0   ;  闰年:1  平年:0
     month db 0  ;  第几月  从0开始
-    day db 1,0eh,1,0,1,0,1,1,0,1,0,1
+    day db 1,8,1,0,1,0,1,1,0,1,0,1
     charCheck_func dw charCheck_year,charCheck_month,charCheck_day
-                   dw charCheck_hour,charCheck_minute_second
-charCheck_c:
+                   dw charCheck_hour,charCheck_minute_second,charCheck_minute_second
+                   ; 这里为了让分和秒都执行同一个函数,故记录两次分秒检查函数
+charCheck_c:        
     mov dl,al   ; 备份 al 写下的数字
  
     ; 通过除以3, 计算需要使用哪一个函数
     mov ax,top2[bp]   ; ax(top2) / bl(3) = al ..  ah
     mov bl,3
     div bl       ; 商 al   余数 ah
+    cmp al,5
+    ja charCheck_o   ; 注意这里, 因为是先检查输入再入栈的, 所以要在在这里先检查输入个数有没有超出  
     mov bl,al    
     mov bh,0
     add bx,bx    ; 很重要, 因为我地址是用的 dw 存的
     add bx,bp
     mov bx,charCheck_func[bx]
     add bx,bp
-    mov al,dl   ; 写下的数字 还给al
+    mov al,dl   ; 写下的数字 还给al  (字符)
 
-    call bx  ; 传入: al:写下的数字, ah: 是十位(0)还是个位(1)
+    call bx  ; 传入: al:写下的数字(字符), ah: 是十位(0)还是个位(1)
              ; 传出: al(改后)  or void(不需要改) 
     ; add al,'0'
     ; call show_debug
@@ -866,6 +929,7 @@ charCheck_c:
     mov es,bx
     mov bx,sp
     mov es:[bx][2*8],al  ; 直接改栈
+charCheck_o:
     jmp charret
 
 charCheck_year:  ; ----[ output: void ]----
@@ -895,7 +959,7 @@ charCheck_year:  ; ----[ output: void ]----
     mov year[bp],0   ; 先默认为平年
     cmp ah,0   ; 真则为闰年 
     jne charCheck_year_o   ; 不是闰年则直接结束, 就是0
-    mov year[bp],1    ; 是则会执行这一句
+        mov year[bp],1    ; 是则会执行这一句
 
     charCheck_year_o:   ;------------------  over ------
     ; mov al,year[bp]    
@@ -908,8 +972,10 @@ charCheck_year:  ; ----[ output: void ]----
     ret
 
 charCheck_month:
-    call show_debug
+    push cx
+    push dx
     push si
+    sub al,'0'
 
     cmp ah,0    ; 十位 ?
     jne charCheck_month_bits ; 不是十位, 那就是个位
@@ -924,20 +990,124 @@ charCheck_month:
     mov ah,ds:[si-1]    ; 十位的数字
     sub ah,'0'
     cmp ah,1    ; 看看十位是 1 吗
-    jne charCheck_month_o    ;  最大12, 超过设置个位为2
+    jne charCheck_month_00    ;  十位1,个位最大2, 超过设置个位为2
         cmp al,2
-        jna charCheck_month_o  ; 没有打过12, 平安无事
+        jna charCheck_month_save  ; 没有大过12, 平安无事
             mov al,2
+        jmp charCheck_month_save    
+    charCheck_month_00:   ; 十位是0, 所以个位最小1
+        cmp al,0
+        jne charCheck_month_save
+            mov al,1
+        jmp charCheck_month_save
+    charCheck_month_save:         ; 保存   
+        mov dl,al   ; 个位
+        mov cl,8
+        shr ax,cl   ; 将高位降到低位,ax = 十位
+        mov dh,10
+        mul dh
+        add al,dl   ; 十位 * 10 + 个位
+        sub al,1
+        mov month[bp],al
+; add al,'0'
+; call show_debug
+; sub al,'0'
+        mov al,dl   ;  将个位还给al
     charCheck_month_o:
     add al,'0'
     pop si
+    pop dx
+    pop cx
     ret
+
 charCheck_day:
+    push bx
+    push dx
+    push si
+
+    sub al,'0'
+    mov bl,month[bp]     ; 月份(0-11)
+    mov dl,bl            ; 备份给dl
+    mov bh,0
+    add bx,bp
+    mov dh,day[bx]       ; 当月的天数的个位
+    mov bl,dl            ; 还原给bl
+    mov dl,3             ; 当月的天数的十位(默认3)
+    cmp bl,1             ; 2月吗
+    jne notFebruary  
+        mov dl,2  
+        ; mov bh,day[bp][1]  ; 二月默认天数, 可以直接8
+        add dh,year[bp]      ; 加上闰年(1)或平年(0)
+    notFebruary:    ; 不是二月
+        cmp ah,0    ; 十位吗
+        jne charCheck_day_bits  ; 那就是个位
+            cmp al,dl       ; 比较这个月的天数的十位
+            jna charCheck_day_o
+                mov al,dl
+                jmp charCheck_day_o
+        charCheck_day_bits: 
+        mov si,offset timeform
+        add si,bp
+        add si,top2[bp]
+        mov ah,ds:[si-1]    ; 十位的数字
+        sub ah,'0'
+        cmp ah,dl             ; 和当月最大天数的十位比较
+        jne charCheck_day_00  ; 十位不是最大, 看看十位是不是0
+            cmp al,dh         ; 和dh(最大个位)比较
+            jna charCheck_day_o  
+                mov al,dh  
+            jmp charCheck_day_o
+        charCheck_day_00:
+        cmp ah,0  ; 看是不是0
+        jne charCheck_day_o   ; 打扰了
+            cmp al,0          ; 在十位是0的情况下,看个位是不是0
+            jne charCheck_day_o
+                mov al,1      ; 给你点颜色康康
+    charCheck_day_o:
+    add al,'0'
+    pop si
+    pop dx
+    pop bx
     ret
+
 charCheck_hour:
+    push si
+
+    sub al,'0'
+    cmp ah,0    ; 十位吗
+    jne charCheck_hour_bits
+        cmp al,2    ; 十位数是2?
+        jna charCheck_hour_o  ; 不大于2 没问题
+            mov al,2  ; 纠正你的狂妄
+        jmp charCheck_hour_o
+    charCheck_hour_bits:
+    mov si,offset timeform
+    add si,bp
+    add si,top2[bp]
+    mov ah,ds:[si-1]    
+    sub ah,'0'       ; 十位的数字
+    cmp ah,2
+    jne charCheck_hour_o  ; 十位不为2, 完好
+        cmp al,3
+        jna charCheck_hour_o   ; 十位为2时, 个位不能超过3 
+            mov al,3
+    charCheck_hour_o:
+    add al,'0'    
+    pop si
     ret
+
 charCheck_minute_second:
+    sub al,'0'
+    cmp ah,0    ; 十位吗
+    jne charCheck_minute_second_o 
+        cmp al,5   ; 看看十位大于5吗
+        jna charCheck_minute_second_o
+            mov al,5
+    charCheck_minute_second_o:
+    add al,'0'    
     ret
+
+
 charret:
     pop ds
     pop es
